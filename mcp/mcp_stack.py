@@ -111,12 +111,24 @@ class McpStack(Stack):
             parameter_name="/account/api",
         )
 
-        composite = _iam.CompositePrincipal(
-            _iam.AccountPrincipal(apigateway_account.string_value),
-            _iam.ServicePrincipal("apigateway.amazonaws.com"),
+        # Explicit cross-account API Gateway permission for HTTP API execute-api ARNs.
+        service_lambda.add_permission(
+            "AllowApiGatewayServiceInvoke",
+            principal=_iam.ServicePrincipal("apigateway.amazonaws.com"),
+            action="lambda:InvokeFunction",
+            source_account=apigateway_account.string_value,
+            source_arn=(
+                f"arn:aws:execute-api:{Stack.of(self).region}:"
+                f"{apigateway_account.string_value}:*/*/*/mcp*"
+            ),
         )
 
-        service_lambda.grant_invoke(composite)
+        # Keep a broader account-principal permission for non-proxy integration patterns.
+        service_lambda.add_permission(
+            "AllowApiAccountInvoke",
+            principal=_iam.AccountPrincipal(apigateway_account.string_value),
+            action="lambda:InvokeFunction",
+        )
 
         # Set reserved concurrent executions for cost control and burst protection.
         service_lambda.reserved_concurrent_executions = 10

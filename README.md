@@ -73,6 +73,37 @@ Returns the full API blueprint for a specific endpoint, including:
 
 For the geo endpoint, ips can contain any combination of IPv4 and IPv6 addresses, with a total count from 1 to 300.
 
+## Direct HTTP Access
+
+The Lambda now supports plain HTTP GET requests to `/mcp` for browser, curl, and non-MCP AI callers.
+
+- `GET /mcp`: Returns discovery JSON and available endpoint names
+- `GET /mcp?endpoint=geo`: Returns the same JSON blueprint as `get_api_instructions("geo")`
+- `GET /mcp?endpoint_name=geo`: Alias for the same behavior
+
+Examples:
+
+```bash
+curl https://api.lukach.io/mcp
+curl "https://api.lukach.io/mcp?endpoint=geo"
+```
+
+## MCP Client Access
+
+For MCP protocol requests (for example `initialize`), clients must include an `Accept` header that contains both `application/json` and `text/event-stream`.
+
+- If this header is missing, the service returns `406 Not Acceptable`.
+- With the correct header, `initialize` succeeds and returns an SSE response with `content-type: text/event-stream` and an `mcp-session-id` header.
+
+Example initialize probe:
+
+```bash
+curl -i -X POST https://api.lukach.io/mcp \
+  -H "content-type: application/json" \
+  -H "accept: application/json, text/event-stream" \
+  --data '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"curl-probe","version":"1.0.0"}}}'
+```
+
 ## Deployment
 
 ### Prerequisites
