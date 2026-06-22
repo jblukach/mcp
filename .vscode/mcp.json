@@ -1,0 +1,8 @@
+{
+  "servers": {
+    "api-lukach-io": {
+      "type": "http",
+      "url": "https://api.lukach.io/mcp"
+    }
+  }
+}

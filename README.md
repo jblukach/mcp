@@ -104,6 +104,20 @@ curl -i -X POST https://api.lukach.io/mcp \
   --data '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"curl-probe","version":"1.0.0"}}}'
 ```
 
+### Short natural-language example
+
+If your chat client has this MCP server configured, a concise prompt can be as simple as:
+
+```text
+Use api-lukach-io to geolocate 8.8.8.8.
+```
+
+You can also ask for a slightly richer result:
+
+```text
+Use api-lukach-io to geolocate 8.8.8.8 and return the city, state, country, and ASN owner.
+```
+
 ## Deployment
 
 ### Prerequisites
