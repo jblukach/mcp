@@ -129,12 +129,88 @@ MAX_ENDPOINT_NAME_LENGTH = 64
 ENDPOINTS = {
     "geo": {
         "endpoint": "https://api.lukach.io/geo",
+        "endpoints": {
+            "failover": {
+                "url": "https://api.lukach.io/geo",
+                "primary_region": "us-east-1",
+                "secondary_region": "us-west-2",
+                "notes": "Route53 failover serves the primary us-east-1 API and fails over to us-west-2.",
+            },
+            "regional": {
+                "us-east-1": "https://use1.api.lukach.io/geo",
+                "us-east-2": "https://use2.api.lukach.io/geo",
+                "us-west-2": "https://usw2.api.lukach.io/geo",
+            },
+        },
         "method": "POST",
         "headers": {"Content-Type": "application/json"},
-        "curl_example": 'curl -X POST https://api.lukach.io/geo -H "Content-Type: application/json" -d \'{"ips":["8.8.8.8","2001:4860:4860::888"]}\'',
+        "mcp": {
+            "endpoint": "https://api.lukach.io/mcp?endpoint=geo",
+            "endpoints": {
+                "failover": {
+                    "url": "https://api.lukach.io/mcp?endpoint=geo",
+                    "primary_region": "us-east-1",
+                    "secondary_region": "us-west-2",
+                },
+                "regional": {
+                    "us-east-1": "https://use1.api.lukach.io/mcp?endpoint=geo",
+                    "us-east-2": "https://use2.api.lukach.io/mcp?endpoint=geo",
+                    "us-west-2": "https://usw2.api.lukach.io/mcp?endpoint=geo",
+                },
+            },
+            "protocol_version": "2025-03-26",
+            "tool_name": "geo_lookup",
+            "supported_methods": [
+                "initialize",
+                "notifications/initialized",
+                "tools/list",
+                "tools/call",
+            ],
+            "tool_call_example": {
+                "jsonrpc": "2.0",
+                "id": 3,
+                "method": "tools/call",
+                "params": {
+                    "name": "geo_lookup",
+                    "arguments": {
+                        "ips": ["1.1.1.1", "2606:4700:4700::1111"],
+                    },
+                },
+            },
+        },
+        "direct_lambda": {
+            "function_name": "search",
+            "regions": ["us-east-1", "us-east-2", "us-west-2"],
+            "payload_example": {"ips": ["1.1.1.1", "8.8.8.8"]},
+            "notes": "Invoke the search Lambda with a direct JSON event; it returns the enrichment payload directly instead of an API Gateway envelope.",
+        },
+        "curl_examples": [
+            "curl 'https://api.lukach.io/geo?ip=1.1.1.1'",
+            "curl 'https://use1.api.lukach.io/geo?ip=1.1.1.1'",
+            "curl 'https://use2.api.lukach.io/geo?ip=1.1.1.1'",
+            "curl 'https://usw2.api.lukach.io/geo?ip=1.1.1.1'",
+            "curl 'https://api.lukach.io/geo?ip=1.1.1.1,2606:4700:4700::1111'",
+            "curl 'https://api.lukach.io/geo/1.1.1.1'",
+            'curl -X POST https://api.lukach.io/geo -H "Content-Type: application/json" -d \'{"ips":["8.8.8.8","2001:4860:4860::888"]}\'',
+        ],
+        "get_request_options": {
+            "query_parameter": {
+                "name": "ip",
+                "description": "Optional. Omit it to look up the request source address. Supply one or more addresses as repeated parameters or a comma-separated value.",
+            },
+            "path_parameter": {
+                "template": "/geo/{ip}",
+                "description": "Optional single-address lookup alternative to the query parameter.",
+            },
+        },
         "payload_schema": {
             "type": "object",
             "properties": {
+                "ip": {
+                    "type": "string",
+                    "description": "A single IPv4 or IPv6 address to geolocate.",
+                    "pattern": "^(?:(?:[0-9]{1,3}\\.){3}[0-9]{1,3}|(?:[0-9a-fA-F]{0,4}:){2,7}[0-9a-fA-F]{0,4})$",
+                },
                 "ips": {
                     "type": "array",
                     "items": {
@@ -146,10 +222,21 @@ ENDPOINTS = {
                     "maxItems": 300,
                 }
             },
-            "required": ["ips"],
+            "anyOf": [{"required": ["ip"]}, {"required": ["ips"]}],
             "additionalProperties": False,
         },
-        "agent_instructions": "You are an AI agent with network capabilities. Use the endpoint, method, headers, and payload_schema provided to construct and execute an HTTP request directly from your environment. Do not ask the user to make the call. Read the payload_schema to understand the required parameters. The 'ips' field accepts any mix of IPv4 and IPv6 addresses, with 1 to 300 total entries. Construct valid JSON matching the schema, then use your local HTTP client or fetch utility to invoke the API. Parse the JSON response and provide the results to the user.",
+        "response_summary": "Successful HTTP, MCP, and direct Lambda responses contain ordered results with ip plus asn.id/asn.org/asn.net and geo.country/geo.state/geo.city/geo.cidr when data is available. Responses also include requested_count, MaxMind attribution, timestamp_utc, serving region, and geolite2-asn.mmdb/geolite2-city.mmdb metadata when available. Invalid addresses produce entry-level errors. Empty or oversized batches return 400; oversized bodies return 413; requests too close to the Lambda timeout return 503.",
+        "limits": {
+            "max_ips_per_request_default": 300,
+            "max_request_body_bytes_default": 262144,
+            "min_remaining_time_ms_default": 1500,
+            "environment_overrides": [
+                "MAX_IPS_PER_REQUEST",
+                "MAX_REQUEST_BODY_BYTES",
+                "MIN_REMAINING_TIME_MS",
+            ],
+        },
+        "agent_instructions": "You are an AI agent with network capabilities. Invoke the public geo API directly from your environment; do not ask the user to make the call. Use https://api.lukach.io for normal public traffic; Route53 failover routes it to us-east-1 first and us-west-2 second. Use https://use1.api.lukach.io, https://use2.api.lukach.io, or https://usw2.api.lukach.io only when the user asks for a specific region, when testing regional health, or when avoiding failover DNS. Prefer the MCP endpoint when an MCP JSON-RPC client is available: initialize with protocolVersion 2025-03-26, list tools if needed, then call geo_lookup with 'ip' or 'ips'. For plain HTTP source-IP lookup, use GET /geo without an IP. For explicit HTTP GET lookups, use either the optional 'ip' query parameter (repeated or comma-separated) or /geo/{ip}. For HTTP POST, send JSON containing 'ip' (one address) or 'ips' (an array of 1 to 300 mixed IPv4/IPv6 addresses). For same-account or authorized AWS workloads, the search Lambda can also be invoked directly in us-east-1, us-east-2, or us-west-2 with the same JSON keys. Parse the JSON response, retain result order, and report entry-level errors alongside successful enrichments.",
     }
 }
 

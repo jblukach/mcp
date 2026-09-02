@@ -13,6 +13,14 @@ from aws_cdk import (
 )
 from constructs import Construct
 
+
+PACKAGE_BUCKETS = {
+    "us-east-1": "packages-use1-lukach-io",
+    "us-east-2": "packages-use2-lukach-io",
+    "us-west-2": "packages-usw2-lukach-io",
+}
+
+
 class McpStack(Stack):
 
     def __init__(self, scope: Construct, construct_id: str, **kwargs) -> None:
@@ -20,21 +28,20 @@ class McpStack(Stack):
 
         account = Stack.of(self).account
 
-        year = datetime.datetime.now().strftime("%Y")
-        month = datetime.datetime.now().strftime("%m")
-        day = datetime.datetime.now().strftime("%d")
+        deployment_date = datetime.datetime.now(datetime.UTC).strftime("%Y-%m-%d")
 
+        region = Stack.of(self).region
         bucket = _s3.Bucket.from_bucket_name(
             self,
             "PackageBucket",
-            bucket_name="packages-use2-lukach-io",
+            bucket_name=PACKAGE_BUCKETS[region],
         )
 
         fastmcp_layer = _lambda.LayerVersion(
             self,
             "FastMcpLayer",
             layer_version_name="fastmcp",
-            description=f"{year}-{month}-{day} deployment",
+            description=f"{deployment_date} deployment",
             code=_lambda.Code.from_bucket(
                 bucket=bucket,
                 key="fastmcp.zip",
@@ -52,7 +59,7 @@ class McpStack(Stack):
             self,
             "MangumLayer",
             layer_version_name="mangum",
-            description=f"{year}-{month}-{day} deployment",
+            description=f"{deployment_date} deployment",
             code=_lambda.Code.from_bucket(
                 bucket=bucket,
                 key="mangum.zip",
@@ -135,7 +142,22 @@ class McpStack(Stack):
         # Set reserved concurrent executions for cost control and burst protection.
         service_lambda.reserved_concurrent_executions = 10
 
+        CfnOutput(
+            self,
+            "ServiceLambdaName",
+            value=service_lambda.function_name,
+        )
+
+        CfnOutput(
+            self,
+            "ServiceLambdaArn",
+            value=service_lambda.function_arn,
+        )
+
     ### OIDC ###
+
+        if region != "us-east-2":
+            return
 
         provider = _iam.OpenIdConnectProvider(
             self, 'provider',
