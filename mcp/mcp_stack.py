@@ -132,13 +132,6 @@ class McpStack(Stack):
             ),
         )
 
-        # Keep a broader account-principal permission for non-proxy integration patterns.
-        service_lambda.add_permission(
-            "AllowApiAccountInvoke",
-            principal=_iam.AccountPrincipal(apigateway_account.string_value),
-            action="lambda:InvokeFunction",
-        )
-
         # Set reserved concurrent executions for cost control and burst protection.
         service_lambda.reserved_concurrent_executions = 10
 
