@@ -6,16 +6,20 @@ external APIs directly from their own execution environment. This service provid
 API endpoint blueprints, specifications, and explicit instructions for AI agents
 to follow when making network calls.
 
-The service exposes two primary tools:
+The service exposes three primary tools:
 - list_available_endpoints(): Discover available API endpoints
 - get_api_instructions(endpoint_name): Get full specification for an endpoint
+- geo_lookup(ip, ips): Look up IP addresses through the Geo API
 """
 
+import asyncio
 import json
 import logging
 import re
 import inspect
+from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qs
+from urllib.request import Request, urlopen
 
 try:
     from fastmcp import Server as McpServer
@@ -113,9 +117,12 @@ def _build_asgi_app():
     http_app = getattr(server, "http_app", None)
     if callable(http_app):
         try:
-            return http_app(path="/mcp", transport="http")
+            return http_app(path="/mcp", transport="http", stateless_http=True)
         except TypeError:
-            return http_app(path="/mcp")
+            try:
+                return http_app(path="/mcp", stateless_http=True)
+            except TypeError:
+                return http_app(path="/mcp")
 
     raise RuntimeError("Unsupported fastmcp server API: missing app/http_app")
 
@@ -143,6 +150,7 @@ ENDPOINTS = {
             },
         },
         "method": "POST",
+        "supported_http_methods": ["GET", "POST"],
         "headers": {"Content-Type": "application/json"},
         "mcp": {
             "endpoint": "https://api.lukach.io/mcp?endpoint=geo",
@@ -158,8 +166,12 @@ ENDPOINTS = {
                     "us-west-2": "https://usw2.api.lukach.io/mcp?endpoint=geo",
                 },
             },
-            "protocol_version": "2025-03-26",
+            "protocol_version": "2025-06-18",
             "tool_name": "geo_lookup",
+            "headers": {
+                "Content-Type": "application/json",
+                "Accept": "application/json, text/event-stream",
+            },
             "supported_methods": [
                 "initialize",
                 "notifications/initialized",
@@ -236,7 +248,11 @@ ENDPOINTS = {
                 "MIN_REMAINING_TIME_MS",
             ],
         },
-        "agent_instructions": "You are an AI agent with network capabilities. Invoke the public geo API directly from your environment; do not ask the user to make the call. Use https://api.lukach.io for normal public traffic; Route53 failover routes it to us-east-1 first and us-west-2 second. Use https://use1.api.lukach.io, https://use2.api.lukach.io, or https://usw2.api.lukach.io only when the user asks for a specific region, when testing regional health, or when avoiding failover DNS. Prefer the MCP endpoint when an MCP JSON-RPC client is available: initialize with protocolVersion 2025-03-26, list tools if needed, then call geo_lookup with 'ip' or 'ips'. For plain HTTP source-IP lookup, use GET /geo without an IP. For explicit HTTP GET lookups, use either the optional 'ip' query parameter (repeated or comma-separated) or /geo/{ip}. For HTTP POST, send JSON containing 'ip' (one address) or 'ips' (an array of 1 to 300 mixed IPv4/IPv6 addresses). For same-account or authorized AWS workloads, the search Lambda can also be invoked directly in us-east-1, us-east-2, or us-west-2 with the same JSON keys. Parse the JSON response, retain result order, and report entry-level errors alongside successful enrichments.",
+        "duplicate_ip_behavior": {
+            "server_behavior": "Valid duplicate IPs are deduplicated for GeoLite2 lookups, then returned in the original input order.",
+            "client_guidance": "Remove duplicate IPs before a request when repeated result entries are not needed; duplicates still count toward the request limit.",
+        },
+        "agent_instructions": "You are an AI agent with network capabilities. Invoke the public geo API directly from your environment; do not ask the user to make the call. Use https://api.lukach.io for normal public traffic; Route53 failover routes it to us-east-1 first and us-west-2 second. Use https://use1.api.lukach.io, https://use2.api.lukach.io, or https://usw2.api.lukach.io only when the user asks for a specific region, when testing regional health, or when avoiding failover DNS. Prefer the MCP endpoint when an MCP JSON-RPC client is available: initialize with protocolVersion 2025-06-18, list tools if needed, then call geo_lookup with 'ip' or 'ips'. For plain HTTP source-IP lookup, use GET /geo without an IP. For explicit HTTP GET lookups, use either the optional 'ip' query parameter (repeated or comma-separated) or /geo/{ip}. For HTTP POST, send JSON containing 'ip' (one address) or 'ips' (an array of 1 to 300 mixed IPv4/IPv6 addresses). For same-account or authorized AWS workloads, the search Lambda can also be invoked directly in us-east-1, us-east-2, or us-west-2 with the same JSON keys. Parse the JSON response, retain result order, and report entry-level errors alongside successful enrichments.",
     }
 }
 
@@ -300,8 +316,41 @@ async def get_api_instructions(endpoint_name: str) -> str:
     return json.dumps(_build_api_instructions_payload(endpoint_name), indent=2)
 
 
+def _invoke_geo_api(payload: dict) -> dict:
+    """Call Geo's HTTP API and preserve its JSON response payload."""
+    request = Request(
+        ENDPOINTS["geo"]["endpoint"],
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+
+    try:
+        with urlopen(request, timeout=20) as response:
+            return json.loads(response.read().decode("utf-8"))
+    except HTTPError as exc:
+        try:
+            return json.loads(exc.read().decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            return {"error": "geo_lookup_failed", "message": f"Geo returned HTTP {exc.code}"}
+    except (URLError, TimeoutError) as exc:
+        return {"error": "geo_lookup_unavailable", "message": str(exc.reason if isinstance(exc, URLError) else exc)}
+
+
+async def geo_lookup(ip: str | None = None, ips: list[str] | None = None) -> dict:
+    """Look up GeoLite2 ASN and location data for one IP or an ordered list."""
+    payload = {}
+    if ip is not None:
+        payload["ip"] = ip
+    if ips is not None:
+        payload["ips"] = ips
+
+    return await asyncio.to_thread(_invoke_geo_api, payload)
+
+
 _register_tool("list_available_endpoints", list_available_endpoints)
 _register_tool("get_api_instructions", get_api_instructions)
+_register_tool("geo_lookup", geo_lookup)
 
 
 # Lambda handler using Mangum for ASGI-to-Lambda translation.

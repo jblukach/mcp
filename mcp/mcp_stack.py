@@ -96,6 +96,7 @@ class McpStack(Stack):
             description="MCP service Lambda function",
             timeout=Duration.seconds(30),
             memory_size=256,
+            reserved_concurrent_executions=10,
             role=role,
             environment={
                 "MCP_REGION": Stack.of(self).region,
@@ -131,9 +132,6 @@ class McpStack(Stack):
                 f"{apigateway_account.string_value}:*/*/*/mcp*"
             ),
         )
-
-        # Set reserved concurrent executions for cost control and burst protection.
-        service_lambda.reserved_concurrent_executions = 10
 
         CfnOutput(
             self,

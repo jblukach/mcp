@@ -1,13 +1,14 @@
 # MCP Discovery and Instruction Service
 
-A serverless Model Context Protocol (MCP) server that acts as a **Discovery and Instruction Service** for AI agents. This service teaches external AI agents how to invoke APIs directly from their own execution environment, without executing API calls itself.
+A serverless Model Context Protocol (MCP) server that acts as a **Discovery and Instruction Service** for AI agents. It provides API instructions and an MCP-native `geo_lookup` tool backed by the Geo HTTP API.
 
 ## Purpose
 
 This MCP server is designed to be called by AI agents (via HTTP API Gateway integration) to:
 1. **Discover available API endpoints** - Agents call `list_available_endpoints()` to see what's available
 2. **Retrieve endpoint instructions** - Agents call `get_api_instructions("endpoint_name")` to get the full specification
-3. **Make direct API calls** - Agents use the returned metadata (endpoint, method, headers, schema, curl example, agent instructions) to invoke APIs from their own environment
+3. **Look up IPs over MCP** - Agents call `geo_lookup()` with `ip` or `ips` to receive Geo data directly
+4. **Make direct API calls** - Agents can use the returned metadata (endpoint, method, headers, schema, curl example, agent instructions) from their own environment
 
 The service provides structured, production-ready guidance to AI agents on request/response formats, authentication, and direct invocation patterns.
 
@@ -61,6 +62,7 @@ Returns the full API blueprint for a specific endpoint, including:
     }
   },
   "method": "POST",
+  "supported_http_methods": ["GET", "POST"],
   "headers": {
     "Content-Type": "application/json"
   },
@@ -87,6 +89,13 @@ Returns the full API blueprint for a specific endpoint, including:
 }
 ```
 
+### `geo_lookup(ip: str | None, ips: list[str] | None)`
+Looks up one IP address or an ordered list of addresses through the Geo API. The result preserves Geo's `results`, `requested_count`, attribution, timestamp, region, and entry-level error fields.
+
+**Parameters:**
+- `ip` (string, optional): One IPv4 or IPv6 address
+- `ips` (array of strings, optional): An ordered list of one to 300 IPv4 or IPv6 addresses
+
 For the geo endpoint, use `GET /geo` without an IP to look up the request source, `GET /geo?ip=...` or `GET /geo/{ip}` for explicit lookups, or `POST /geo` with either `ip` (one address) or `ips` (1 to 300 mixed IPv4 and IPv6 addresses). Query values may be repeated or comma-separated.
 
 Use `https://api.lukach.io/geo` for normal public traffic. Route53 failover serves `api.lukach.io` from `us-east-1` as primary and `us-west-2` as secondary. Use the regional endpoints when testing a specific region or intentionally bypassing failover DNS:
@@ -95,9 +104,13 @@ Use `https://api.lukach.io/geo` for normal public traffic. Route53 failover serv
 - `https://use2.api.lukach.io/geo` for `us-east-2`
 - `https://usw2.api.lukach.io/geo` for `us-west-2`
 
-The geo service also exposes its own MCP JSON-RPC surface at `https://api.lukach.io/mcp?endpoint=geo`, with regional equivalents at `https://use1.api.lukach.io/mcp?endpoint=geo`, `https://use2.api.lukach.io/mcp?endpoint=geo`, and `https://usw2.api.lukach.io/mcp?endpoint=geo`. The MCP tool is named `geo_lookup`, supports protocol version `2025-03-26`, and accepts the same `ip` or `ips` arguments. Authorized AWS workloads can invoke the `search` Lambda directly in `us-east-1`, `us-east-2`, or `us-west-2` with the same JSON keys.
+This MCP service exposes `geo_lookup` at `https://api.lukach.io/mcp?endpoint=geo`, with regional equivalents at `https://use1.api.lukach.io/mcp?endpoint=geo`, `https://use2.api.lukach.io/mcp?endpoint=geo`, and `https://usw2.api.lukach.io/mcp?endpoint=geo`. The tool forwards calls to Geo, supports protocol version `2025-06-18`, and accepts the same `ip` or `ips` arguments. Authorized AWS workloads can invoke the `search` Lambda directly in `us-east-1`, `us-east-2`, or `us-west-2` with the same JSON keys.
+
+MCP requests require `Content-Type: application/json` and an `Accept` header containing both `application/json` and `text/event-stream`.
 
 Geo responses include ordered `results`; each successful entry can contain `asn.id`, `asn.org`, `asn.net`, `geo.country`, `geo.state`, `geo.city`, and `geo.cidr`. Top-level responses include `requested_count`, MaxMind attribution, `timestamp_utc`, serving `region`, and `geolite2-asn.mmdb` / `geolite2-city.mmdb` metadata when available. Invalid addresses are returned in order with entry-level `error` values.
+
+Valid duplicate IPs are deduplicated for GeoLite2 database reads, but the response retains duplicate entries in the original input order and includes them in `requested_count`. Remove duplicates before a request when repeated result entries are not needed; they still count toward the request limit.
 
 ## Direct HTTP Access
 
@@ -119,10 +132,10 @@ curl "https://usw2.api.lukach.io/mcp?endpoint=geo"
 
 ## MCP Client Access
 
-For MCP protocol requests (for example `initialize`), clients must include an `Accept` header that contains both `application/json` and `text/event-stream`.
+For MCP protocol requests (for example `initialize`), clients must include an `Accept` header that contains both `application/json` and `text/event-stream`. The HTTP transport is stateless, so tool requests do not depend on retaining an in-memory session between Lambda invocations.
 
 - If this header is missing, the service returns `406 Not Acceptable`.
-- With the correct header, `initialize` succeeds and returns an SSE response with `content-type: text/event-stream` and an `mcp-session-id` header.
+- With the correct header, `initialize` succeeds and returns an SSE response with `content-type: text/event-stream`.
 
 Example initialize probe:
 
